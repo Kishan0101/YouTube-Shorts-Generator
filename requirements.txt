@@ -1,0 +1,10 @@
+
+reflex==0.8.17a1
+yt-dlp
+pydub
+moviepy
+transformers
+textblob
+pillow
+faster-whisper
+numpy
