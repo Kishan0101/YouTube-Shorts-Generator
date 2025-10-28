@@ -5,6 +5,9 @@ from textblob import TextBlob
 import numpy as np
 import uuid
 from app.states.video_state import VideoState, TranscriptionSegment, Clip
+from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.video.VideoClip import TextClip
+from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,7 +32,7 @@ class AnalysisState(rx.State):
                 yield rx.toast.error("Analysis failed: Video file missing.")
             return
         try:
-            video_path = rx.get_upload_dir() / project["file_path"]
+            video_path = str(rx.get_upload_dir() / project["file_path"])
             model = WhisperModel("tiny", device="cpu", compute_type="int8")
             segments, _ = model.transcribe(video_path, word_timestamps=True)
             transcription_segments = [
@@ -51,11 +54,16 @@ class AnalysisState(rx.State):
                 duration = seg["end"] - seg["start"]
                 wps = word_count / duration if duration > 0 else 0
                 wps_score = min(wps / 5, 1.0)
+                loudness_score = 0.5
                 engagement_score = (
-                    sentiment_score * 0.4 + subjectivity_score * 0.3 + wps_score * 0.3
+                    sentiment_score * vs.sentiment_weight
+                    + subjectivity_score * vs.subjectivity_weight
+                    + wps_score * vs.wps_weight
                 )
                 scored_segments.append({**seg, "score": engagement_score})
-            clips = self._find_best_clips(scored_segments, project["duration"])
+            clips = self._find_best_clips(
+                scored_segments, project["duration"], project_id
+            )
             async with self:
                 vs = await self.get_state(VideoState)
                 vs._update_project_status(project_id, status="complete", clips=clips)
@@ -72,7 +80,11 @@ class AnalysisState(rx.State):
                 yield rx.toast.error(f"Analysis failed: {e}")
 
     def _find_best_clips(
-        self, scored_segments: list[dict], video_duration: float, num_clips=5
+        self,
+        scored_segments: list[dict],
+        video_duration: float,
+        project_id: str,
+        num_clips=5,
     ) -> list[Clip]:
         if not scored_segments:
             return []
@@ -112,6 +124,44 @@ class AnalysisState(rx.State):
                         text=best_clip_info["text"],
                         score=best_clip_info["score"],
                         duration_str="",
+                        video_id=project_id,
+                        status="pending",
                     )
                 )
         return sorted(best_clips, key=lambda x: x["score"], reverse=True)
+
+    @rx.event(background=True)
+    async def generate_short(self, clip_info: dict):
+        video_id = clip_info["video_id"]
+        clip_id = clip_info["id"]
+        async with self:
+            vs = await self.get_state(VideoState)
+            vs._update_clip_status(video_id, clip_id, "generating")
+            yield rx.toast.info(f"Generating short for clip...")
+        try:
+            async with self:
+                vs = await self.get_state(VideoState)
+                project = next(
+                    (p for p in vs.video_projects if p["id"] == video_id), None
+                )
+            if not project or not project.get("file_path"):
+                raise ValueError("Original video file not found.")
+            video_path = str(rx.get_upload_dir() / project["file_path"])
+            video_clip = VideoFileClip(video_path).subclip(
+                clip_info["start"], clip_info["end"]
+            )
+            output_dir = rx.get_upload_dir() / "shorts"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_filename = f"{video_id}_{clip_id}.mp4"
+            output_path = str(output_dir / output_filename)
+            video_clip.write_videofile(output_path, codec="libx264", audio_codec="aac")
+            async with self:
+                vs = await self.get_state(VideoState)
+                vs._update_clip_status(video_id, clip_id, "complete")
+                yield rx.toast.success("Short generated successfully!")
+        except Exception as e:
+            logging.exception(f"Error generating short: {e}")
+            async with self:
+                vs = await self.get_state(VideoState)
+                vs._update_clip_status(video_id, clip_id, "error")
+                yield rx.toast.error(f"Failed to generate short: {e}")

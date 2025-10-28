@@ -25,6 +25,8 @@ class Clip(TypedDict):
     text: str
     score: float
     duration_str: str
+    video_id: str
+    status: Literal["pending", "generating", "complete", "error"]
 
 
 class Video(TypedDict):
@@ -48,6 +50,10 @@ class VideoState(rx.State):
     is_loading: bool = False
     error: str | None = None
     processing_video_id: str | None = None
+    cookie_file_path: str | None = None
+    sentiment_weight: float = 0.4
+    subjectivity_weight: float = 0.3
+    wps_weight: float = 0.3
 
     @rx.var
     def has_projects(self) -> bool:
@@ -89,6 +95,32 @@ class VideoState(rx.State):
         self.video_url = url
         self.error = None
 
+    @rx.event
+    def set_sentiment_weight(self, value: float):
+        self.sentiment_weight = float(value)
+
+    @rx.event
+    def set_subjectivity_weight(self, value: float):
+        self.subjectivity_weight = float(value)
+
+    @rx.event
+    def set_wps_weight(self, value: float):
+        self.wps_weight = float(value)
+
+    @rx.event
+    async def handle_cookie_upload(self, files: list[rx.UploadFile]):
+        if not files:
+            return
+        file = files[0]
+        upload_data = await file.read()
+        upload_dir = rx.get_upload_dir() / "cookies"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        file_path = upload_dir / file.name
+        with file_path.open("wb") as f:
+            f.write(upload_data)
+        self.cookie_file_path = f"cookies/{file.name}"
+        yield rx.toast.info(f"Uploaded cookie file: {file.name}")
+
     @rx.event(background=True)
     async def add_video(self):
         if not self.video_url:
@@ -106,6 +138,10 @@ class VideoState(rx.State):
                 "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
                 "noplaylist": True,
             }
+            if self.cookie_file_path:
+                cookie_path = rx.get_upload_dir() / self.cookie_file_path
+                if cookie_path.exists():
+                    ydl_opts["cookies"] = str(cookie_path)
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(self.video_url, download=False)
             project_id = str(uuid.uuid4())
@@ -162,6 +198,20 @@ class VideoState(rx.State):
                     self.video_projects[i]["clips"] = clips
                 break
 
+    def _update_clip_status(
+        self,
+        video_id: str,
+        clip_id: str,
+        status: Literal["pending", "generating", "complete", "error"],
+    ):
+        for proj in self.video_projects:
+            if proj["id"] == video_id:
+                for i, clip in enumerate(proj["clips"]):
+                    if clip["id"] == clip_id:
+                        proj["clips"][i]["status"] = status
+                        break
+                break
+
     @rx.event
     def set_processing_video_id(self, video_id: str | None):
         self.processing_video_id = video_id
@@ -177,13 +227,20 @@ class VideoState(rx.State):
         upload_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{project_id}.mp4"
         output_path = upload_dir / filename
+        progress_hook_self = self
 
         @rx.event
         def progress_hook(d):
             if d["status"] == "downloading":
-                progress = int(d.get("_percent_str", "0%").replace("%", ""))
-                self._update_project_status(project_id, "downloading", progress)
-                yield
+                progress_str = d.get("_percent_str", "0%").strip().replace("%", "")
+                try:
+                    progress = int(float(progress_str))
+                    progress_hook_self.video_projects = [
+                        {**p, "progress": progress} if p["id"] == project_id else p
+                        for p in progress_hook_self.video_projects
+                    ]
+                except (ValueError, TypeError) as e:
+                    logging.exception(f"Error parsing progress: {e}")
 
         ydl_opts = {
             "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -191,6 +248,10 @@ class VideoState(rx.State):
             "progress_hooks": [progress_hook],
             "noplaylist": True,
         }
+        if self.cookie_file_path:
+            cookie_path = rx.get_upload_dir() / self.cookie_file_path
+            if cookie_path.exists():
+                ydl_opts["cookies"] = str(cookie_path)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([project["url"]])

@@ -8,3 +8,6 @@ textblob
 pillow
 faster-whisper
 numpy
+pyaudioop
+imageio
+imageio-ffmpeg

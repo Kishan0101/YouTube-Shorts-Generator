@@ -47,6 +47,84 @@ def video_input_card() -> rx.Component:
     )
 
 
+def scoring_weights_card() -> rx.Component:
+    return rx.el.div(
+        rx.el.h2(
+            "Scoring Weights", class_name="text-lg font-semibold text-gray-900 mb-4"
+        ),
+        rx.el.div(
+            rx.el.div(
+                rx.el.label(
+                    "Sentiment Weight", class_name="text-sm font-medium text-gray-700"
+                ),
+                rx.el.span(
+                    f"{VideoState.sentiment_weight:.2f}",
+                    class_name="text-sm font-bold text-purple-600",
+                ),
+                class_name="flex justify-between items-center mb-1",
+            ),
+            rx.el.input(
+                type="range",
+                min=0,
+                max=1,
+                step=0.05,
+                default_value=VideoState.sentiment_weight.to_string(),
+                on_change=VideoState.set_sentiment_weight.throttle(50),
+                key="sentiment_weight_slider",
+                class_name="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600",
+            ),
+            class_name="mb-4",
+        ),
+        rx.el.div(
+            rx.el.div(
+                rx.el.label(
+                    "Subjectivity Weight",
+                    class_name="text-sm font-medium text-gray-700",
+                ),
+                rx.el.span(
+                    f"{VideoState.subjectivity_weight:.2f}",
+                    class_name="text-sm font-bold text-purple-600",
+                ),
+                class_name="flex justify-between items-center mb-1",
+            ),
+            rx.el.input(
+                type="range",
+                min=0,
+                max=1,
+                step=0.05,
+                default_value=VideoState.subjectivity_weight.to_string(),
+                on_change=VideoState.set_subjectivity_weight.throttle(50),
+                key="subjectivity_weight_slider",
+                class_name="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600",
+            ),
+            class_name="mb-4",
+        ),
+        rx.el.div(
+            rx.el.div(
+                rx.el.label(
+                    "Words/Sec Weight", class_name="text-sm font-medium text-gray-700"
+                ),
+                rx.el.span(
+                    f"{VideoState.wps_weight:.2f}",
+                    class_name="text-sm font-bold text-purple-600",
+                ),
+                class_name="flex justify-between items-center mb-1",
+            ),
+            rx.el.input(
+                type="range",
+                min=0,
+                max=1,
+                step=0.05,
+                default_value=VideoState.wps_weight.to_string(),
+                on_change=VideoState.set_wps_weight.throttle(50),
+                key="wps_weight_slider",
+                class_name="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600",
+            ),
+        ),
+        class_name="bg-white p-6 rounded-lg shadow-[0px_1px_3px_rgba(0,0,0,0.12)] border border-gray-200/50",
+    )
+
+
 def project_card(project: Video) -> rx.Component:
     return rx.el.div(
         rx.el.div(
@@ -74,7 +152,7 @@ def project_card(project: Video) -> rx.Component:
                             rx.el.div(
                                 class_name="w-full bg-purple-200 rounded-full h-1.5 animate-pulse"
                             ),
-                            class_name="w-full bg-gray-200 rounded-full h-1.5 mb-2",
+                            class_name="w-full bg-gray-200 rounded-full h-1-5 mb-2",
                         ),
                     ),
                     rx.el.div(),
@@ -155,6 +233,8 @@ def project_card(project: Video) -> rx.Component:
 
 
 def clip_card(clip: Clip, index: int) -> rx.Component:
+    is_generating = clip["status"] == "generating"
+    is_pending = clip["status"] == "pending"
     return rx.el.div(
         rx.el.div(
             rx.el.div(
@@ -181,9 +261,17 @@ def clip_card(clip: Clip, index: int) -> rx.Component:
                     class_name="flex items-center gap-2",
                 ),
                 rx.el.button(
-                    rx.icon("scissors", class_name="h-4 w-4 mr-2"),
-                    "Generate Short",
-                    class_name="text-xs bg-purple-500 text-white px-3 py-1 rounded-md hover:bg-purple-600 transition-colors",
+                    rx.cond(
+                        is_generating,
+                        rx.spinner(color="white", size="1"),
+                        rx.el.span(
+                            rx.icon("scissors", class_name="h-4 w-4 mr-2"),
+                            "Generate Short",
+                        ),
+                    ),
+                    on_click=lambda: AnalysisState.generate_short(clip),
+                    disabled=is_generating,
+                    class_name="text-xs bg-purple-500 text-white px-3 py-1 rounded-md hover:bg-purple-600 transition-colors flex items-center disabled:bg-purple-300",
                 ),
                 class_name="flex justify-between items-center",
             ),
@@ -222,7 +310,7 @@ def project_list() -> rx.Component:
                 class_name="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6",
             ),
             rx.el.div(
-                rx.icon("video-off", class_name="h-12 w-12 text-gray-400 mx-auto"),
+                rx.icon("video_off", class_name="h-12 w-12 text-gray-400 mx-auto"),
                 rx.el.h3(
                     "No Projects Yet",
                     class_name="mt-4 text-sm font-medium text-gray-900",
@@ -239,7 +327,11 @@ def project_list() -> rx.Component:
 
 def dashboard() -> rx.Component:
     return rx.el.div(
-        video_input_card(),
+        rx.el.div(
+            video_input_card(),
+            scoring_weights_card(),
+            class_name="grid grid-cols-1 lg:grid-cols-2 gap-6",
+        ),
         rx.el.div(class_name="my-8"),
         project_list(),
         class_name="p-6 md:p-8",
